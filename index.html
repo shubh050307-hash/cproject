@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Escape From Maze</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --text-color: #ffffff;
+            --accent-color: #00ffcc;
+            --wall-color: #333333;
+            --player-color: #ff0055;
+            --exit-color: #00ffcc;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        #game-ui {
+            display: flex;
+            justify-content: space-between;
+            width: 90%;
+            max-width: 600px;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-sizing: border-box;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .stat-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            color: #aaaaaa;
+            letter-spacing: 1px;
+        }
+
+        .stat-value {
+            color: var(--accent-color);
+        }
+
+        canvas {
+            background-color: #1e1e1e;
+            border: 2px solid var(--accent-color);
+            border-radius: 4px;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
+        }
+
+        #controls-help {
+            margin-top: 15px;
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        /* Overlay for level transitions */
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        #overlay.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        #overlay h1 {
+            color: var(--accent-color);
+            font-size: 3rem;
+            margin-bottom: 10px;
+        }
+
+        button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 1.2rem;
+            background-color: var(--accent-color);
+            color: #000;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.1s, background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: #00ccaa;
+            transform: scale(1.05);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-ui">
+        <div class="stat-box">
+            <span class="stat-label">Level</span>
+            <span class="stat-value" id="levelDisplay">1</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-label">Score</span>
+            <span class="stat-value" id="scoreDisplay">0</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-label">Time</span>
+            <span class="stat-value" id="timeDisplay">0.0s</span>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas" width="600" height="600"></canvas>
+    
+    <div id="controls-help">Use <b>W A S D</b> or <b>Arrow Keys</b> to move. Reach the cyan square!</div>
+
+    <div id="overlay">
+        <h1 id="overlayTitle">Level Complete!</h1>
+        <p id="overlayText">Generating next maze...</p>
+        <button id="restartBtn" style="display: none;">Play Again</button>
+    </div>
+
+    <script>
+        /**
+         * Game Configuration & State
+         */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        let cols, rows;
+        let cellSize;
+        let grid = [];
+        let currentLevel = 1;
+        let score = 0;
+        let startTime = 0;
+        let timerInterval;
+        let elapsedTime = 0;
+        let isTransitioning = false;
+        
+        const baseSize = 8; // Starting grid size (8x8)
+        
+        // UI Elements
+        const levelDisplay = document.getElementById('levelDisplay');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const timeDisplay = document.getElementById('timeDisplay');
+        const overlay = document.getElementById('overlay');
+        const overlayTitle = document.getElementById('overlayTitle');
+        const restartBtn = document.getElementById('restartBtn');
+
+        /**
+         * Cell Class for Maze Generation (Recursive Backtracking)
+         */
+        class Cell {
+            constructor(c, r) {
+                this.c = c; // Column (x)
+                this.r = r; // Row (y)
+                this.walls = { top: true, right: true, bottom: true, left: true };
+                this.visited = false;
+            }
+
+            draw() {
+                const x = this.c * cellSize;
+                const y = this.r * cellSize;
+                ctx.strokeStyle = '#333333';
+                ctx.lineWidth = 2;
+
+                ctx.beginPath();
+                if (this.walls.top) { ctx.moveTo(x, y); ctx.lineTo(x + cellSize, y); }
+                if (this.walls.right) { ctx.moveTo(x + cellSize, y); ctx.lineTo(x + cellSize, y + cellSize); }
+                if (this.walls.bottom) { ctx.moveTo(x + cellSize, y + cellSize); ctx.lineTo(x, y + cellSize); }
+                if (this.walls.left) { ctx.moveTo(x, y + cellSize); ctx.lineTo(x, y); }
+                ctx.stroke();
+            }
+
+            getUnvisitedNeighbors() {
+                const neighbors = [];
+                const top = getCell(this.c, this.r - 1);
+                const right = getCell(this.c + 1, this.r);
+                const bottom = getCell(this.c, this.r + 1);
+                const left = getCell(this.c - 1, this.r);
+
+                if (top && !top.visited) neighbors.push(top);
+                if (right && !right.visited) neighbors.push(right);
+                if (bottom && !bottom.visited) neighbors.push(bottom);
+                if (left && !left.visited) neighbors.push(left);
+
+                if (neighbors.length > 0) {
+                    const r = Math.floor(Math.random() * neighbors.length);
+                    return neighbors[r];
+                } else {
+                    return undefined;
+                }
+            }
+        }
+
+        /**
+         * Player Entity
+         */
+        const player = {
+            c: 0,
+            r: 0,
+            draw() {
+                const x = this.c * cellSize + cellSize / 2;
+                const y = this.r * cellSize + cellSize / 2;
+                const radius = cellSize * 0.35;
+
+                ctx.fillStyle = '#ff0055';
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Add a little glow
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#ff0055';
+                ctx.fill();
+                ctx.shadowBlur = 0; // Reset
+            },
+            move(dc, dr) {
+                if (isTransitioning) return;
+
+                const currentCell = getCell(this.c, this.r);
+                
+                // Collision Detection against walls
+                if (dc === 0 && dr === -1 && !currentCell.walls.top) this.r--;       // UP
+                else if (dc === 1 && dr === 0 && !currentCell.walls.right) this.c++; // RIGHT
+                else if (dc === 0 && dr === 1 && !currentCell.walls.bottom) this.r++;// DOWN
+                else if (dc === -1 && dr === 0 && !currentCell.walls.left) this.c--; // LEFT
+
+                checkWinCondition();
+            }
+        };
+
+        // Utility: Get cell by column and row safely
+        function getCell(c, r) {
+            if (c < 0 || r < 0 || c > cols - 1 || r > rows - 1) return undefined;
+            return grid[c + r * cols];
+        }
+
+        /**
+         * Maze Generation Logic
+         */
+        function generateMaze() {
+            grid = [];
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    grid.push(new Cell(c, r));
+                }
+            }
+
+            const stack = [];
+            let current = grid[0];
+            current.visited = true;
+
+            // Iterative implementation of Recursive Backtracking to avoid call stack limits
+            let loopSafety = 0; 
+            while (true) {
+                loopSafety++;
+                if(loopSafety > 100000) break; // Failsafe
+
+                const next = current.getUnvisitedNeighbors();
+                if (next) {
+                    stack.push(current);
+                    removeWalls(current, next);
+                    current = next;
+                    current.visited = true;
+                } else if (stack.length > 0) {
+                    current = stack.pop();
+                } else {
+                    break; // Maze generation complete
+                }
+            }
+        }
+
+        function removeWalls(a, b) {
+            const x = a.c - b.c;
+            if (x === 1) { a.walls.left = false; b.walls.right = false; }
+            else if (x === -1) { a.walls.right = false; b.walls.left = false; }
+
+            const y = a.r - b.r;
+            if (y === 1) { a.walls.top = false; b.walls.bottom = false; }
+            else if (y === -1) { a.walls.bottom = false; b.walls.top = false; }
+        }
+
+        /**
+         * Rendering Logic
+         */
+        function drawExit() {
+            // Exit is always at the bottom right
+            const exitC = cols - 1;
+            const exitR = rows - 1;
+            const x = exitC * cellSize;
+            const y = exitR * cellSize;
+            const padding = cellSize * 0.2;
+
+            ctx.fillStyle = '#00ffcc';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00ffcc';
+            ctx.fillRect(x + padding, y + padding, cellSize - padding*2, cellSize - padding*2);
+            ctx.shadowBlur = 0;
+        }
+
+        function render() {
+            // Clear canvas
+            ctx.fillStyle = '#1e1e1e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Grid/Walls
+            for (let i = 0; i < grid.length; i++) {
+                grid[i].draw();
+            }
+
+            drawExit();
+            player.draw();
+
+            requestAnimationFrame(render);
+        }
+
+        /**
+         * Game Flow & Logic
+         */
+        function startGame(level) {
+            currentLevel = level;
+            isTransitioning = false;
+            
+            // Difficulty scaling
+            cols = baseSize + (level * 2);
+            rows = baseSize + (level * 2);
+            
+            // Cap size to maintain performance and playability
+            if (cols > 40) cols = 40; 
+            if (rows > 40) rows = 40;
+
+            cellSize = canvas.width / cols;
+
+            generateMaze();
+            
+            // Reset Player
+            player.c = 0;
+            player.r = 0;
+
+            // Update UI
+            levelDisplay.innerText = currentLevel;
+            scoreDisplay.innerText = score;
+            
+            overlay.classList.remove('active');
+            
+            startTimer();
+        }
+
+        function startTimer() {
+            clearInterval(timerInterval);
+            startTime = Date.now();
+            timerInterval = setInterval(() => {
+                elapsedTime = (Date.now() - startTime) / 1000;
+                timeDisplay.innerText = elapsedTime.toFixed(1) + 's';
+            }, 100);
+        }
+
+        function checkWinCondition() {
+            if (player.c === cols - 1 && player.r === rows - 1) {
+                levelComplete();
+            }
+        }
+
+        function calculateScore() {
+            // Base score increases by level. Faster completion = higher score multiplier.
+            const baseScore = currentLevel * 100;
+            const targetTime = currentLevel * 3; // expected 3 seconds per level difficulty step
+            let timeBonus = targetTime - elapsedTime;
+            
+            if (timeBonus < 0) timeBonus = 0;
+            
+            const levelScore = Math.floor(baseScore + (timeBonus * 20));
+            score += levelScore;
+        }
+
+        function levelComplete() {
+            isTransitioning = true;
+            clearInterval(timerInterval);
+            calculateScore();
+            
+            overlayTitle.innerText = "Level Complete!";
+            overlayTitle.style.color = "#00ffcc";
+            restartBtn.style.display = "none";
+            overlay.classList.add('active');
+
+            // Pause slightly before loading next level
+            setTimeout(() => {
+                startGame(currentLevel + 1);
+            }, 1500);
+        }
+
+        // Input Handling
+        window.addEventListener('keydown', (e) => {
+            // Prevent default scrolling for arrow keys and space
+            if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].indexOf(e.code) > -1) {
+                e.preventDefault();
+            }
+
+            switch(e.key.toLowerCase()) {
+                case 'w':
+                case 'arrowup':
+                    player.move(0, -1);
+                    break;
+                case 'd':
+                case 'arrowright':
+                    player.move(1, 0);
+                    break;
+                case 's':
+                case 'arrowdown':
+                    player.move(0, 1);
+                    break;
+                case 'a':
+                case 'arrowleft':
+                    player.move(-1, 0);
+                    break;
+            }
+        });
+
+        // Initialize Game
+        startGame(1);
+        requestAnimationFrame(render);
+
+    </script>
+</body>
+</html>
